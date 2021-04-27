@@ -1,0 +1,220 @@
+
+import os
+import re
+import pandas as pd
+import numpy as np
+import datetime as dt
+
+searchdir = r'' ## input primary directory
+committee_directory = os.listdir(searchdir)
+
+## Creates vector for versioning
+
+versioning = []
+for i in committee_directory:
+    if re.findall('[v]\d{1,2}',i)==[]:
+        versioning.append(0)
+    else:
+        versioning.append(re.findall('[v]\d{1,2}',i)[0])
+
+## Clean Version Population
+
+clean_versioning = list(set(versioning))
+clean_versioning.remove(0)
+clean_versioning.remove('v1')
+clean_versioning.remove('v5')
+clean_versioning.remove('v6')
+clean_versioning.remove('v7')
+
+
+## Remove non-versioned Committe Reports :::: Report - Credit Analysis
+
+series_coms = pd.Series(committee_directory)
+clean_com_reports = series_coms[series_coms.str.contains('|'.join(clean_versioning))]
+
+## Parse Deal Names
+
+deal_name = []
+for i in clean_com_reports:
+    if re.findall('\w+\s\w+[-]\w+',i)==[]:
+        deal_name.append(0)
+    else:
+        deal_name.append(re.findall('\w+\s\w+[-]\w+',i)[0])
+
+## Clean Deal Name Population
+
+clean_deal_name = list(set(deal_name))
+clean_deal_name.remove(0)
+
+## Remove files lacking deal name
+
+fin_com_clean = clean_com_reports[clean_com_reports.str.contains('|'.join(clean_deal_name))]
+
+## Dictionary of all committee report versions
+
+vectorofvectors = {}
+for i in clean_versioning:
+    vectorofvectors[i] = [fin_com_clean[fin_com_clean.str.contains(i)]]
+
+## Delete randomly structured reports
+
+del vectorofvectors['v22'][0][vectorofvectors['v22'][0].index[list(vectorofvectors['v22'][0]).index('~filename')]] ##insert filename
+
+
+### Reporting function
+
+def vector_reports(v):
+    sampledfvector = []
+    for i in vectorofvectors[v][0]:
+        temp = pd.read_excel(os.path.join(searchdir,i),'Report - Credit Analysis',header=None)
+        temp.columns = temp.iloc[[4]].values.tolist()
+        temp.drop(temp.index[0:5],inplace=True)
+        temp['Date_Report'] = re.findall('\d{8}',i)[0]
+        temp['Version'] = v
+        temp['Deal_Name'] = re.findall('\w+\s\w+[-]\w+',i)[0]
+        temp = temp.drop(['#'],axis=1)
+        temp= temp[temp['Loan Name'] !=0]
+        sampledfvector.append(temp)
+    sample_merged_df = pd.DataFrame(index=pd.io.parsers.ParserBase({'names':sampledfvector[0].columns})._maybe_dedup_names(sampledfvector[0].columns))
+    success = 0
+    failure = 0
+    for j in range(0,len(sampledfvector)):
+        try:
+            sampledfvector[j].columns = pd.io.parsers.ParserBase({'names':sampledfvector[j].columns})._maybe_dedup_names(sampledfvector[j].columns)
+            sample_merged_df = pd.merge(sample_merged_df,sampledfvector[j].T,left_index=True, right_index=True, how='left')
+            success += 1
+        except:
+            failure +=1
+            pass
+    return [sample_merged_df,success,failure]
+
+## Loop function for all committee report versions
+
+mast_dict_versions = {}
+failed_version_merge = []
+for i in clean_versioning:
+    try:
+        mast_dict_versions[i] = vector_reports(i)
+    except:
+        failed_version_merge.append(i)
+        pass
+
+## Control Flow
+
+if failed_version_merge == []:
+    pass
+else:
+    failed_force_run = {}
+    try:
+        for i in failed_version_merge:
+            failed_force_run[i] = (vector_reports(i))
+    except:
+        pass
+
+## transpose the dataframe with the longest columns, index column names, add suffix to dup columns, run merge, and re-transpose
+
+final_agg_df = pd.DataFrame(index= mast_dict_versions['v29'][0].T.columns)
+
+for key in mast_dict_versions.keys():
+    final_agg_df = pd.merge(final_agg_df,mast_dict_versions[key][0],left_index=True, right_index=True, how='left')
+
+if failed_version_merge == []:
+    pass
+else:
+    for key in failed_force_run.keys():
+        failed_force_run[key][0].columns = pd.io.parsers.ParserBase({'names':failed_force_run[key][0].columns})._maybe_dedup_names(failed_force_run[key][0].columns)
+        final_agg_df = pd.merge(final_agg_df,failed_force_run[key][0].T,left_index=True, right_index=True, how='left')
+
+final_agg_df = final_agg_df.T
+final_agg_df = final_agg_df.dropna(subset=['Loan Name'])
+final_agg_df['Ln\nID'] = final_agg_df['Ln\nID'].astype('str')
+final_agg_df['Key'] = final_agg_df['Ln\nID']+final_agg_df['Deal_Name']
+
+## Manual Intervention
+
+manual_set = set(list(final_agg_df['Deal_Name']+" Committee Report "+final_agg_df['Version']+" "+final_agg_df['Date_Report']+".xlsx"))
+diff_files = list(set(list(fin_com_clean))-manual_set)
+
+if diff_files==[]:
+    pass
+else:
+    del diff_files[diff_files.index('')] #filename as index
+    
+    manual_versioning = []
+    for i in diff_files:
+        if re.findall('[v]\d{1,2}',i)==[]:
+            manual_versioning.append(0)
+        else:
+            manual_versioning.append(re.findall('[v]\d{1,2}',i)[0])
+    
+    manualvectorofvectors = {}
+    for i in list(set(manual_versioning)):
+        manualvectorofvectors[i] = [pd.Series(diff_files)[pd.Series(diff_files).str.contains(i)]]
+    
+    
+    def manual_reports(v):
+        manualdfvector = []
+        for i in manualvectorofvectors[v][0]:
+            temp = pd.read_excel(os.path.join(searchdir,i),'Report - Credit Analysis',header=None)
+            temp.columns = temp.iloc[[4]].values.tolist()
+            temp.drop(temp.index[0:5],inplace=True)
+            temp['Date_Report'] = re.findall('\d{8}',i)[0]
+            temp['Version'] = v
+            temp['Deal_Name'] = re.findall('\w+\s\w+[-]\w+',i)[0]
+            temp = temp.drop(['#'],axis=1)
+            temp= temp[temp['Loan Name'] !=0]
+            manualdfvector.append(temp)
+        manual_merged_df = pd.DataFrame(index=pd.io.parsers.ParserBase({'names':manualdfvector[0].columns})._maybe_dedup_names(manualdfvector[0].columns))
+        manualsuccess = 0
+        manualfailure = 0
+        for j in range(0,len(manualdfvector)):
+            try:
+                manualdfvector[j].columns = pd.io.parsers.ParserBase({'names':manualdfvector[j].columns})._maybe_dedup_names(manualdfvector[j].columns)
+                manual_merged_df = pd.merge(manual_merged_df,manualdfvector[j].T,left_index=True, right_index=True, how='left')
+                manualsuccess += 1
+            except:
+                manualfailure +=1
+                pass
+        return [manual_merged_df,manualsuccess,manualfailure]
+    
+    
+    manual_mast_dict_versions = {}
+    manual_failed_version_merge = []
+    for i in list(set(manual_versioning)):
+        try:
+            manual_mast_dict_versions[i] = manual_reports(i)
+        except:
+            manual_failed_version_merge.append(i)
+            pass
+    
+    manual_agg_df = pd.DataFrame(index= mast_dict_versions['v29'][0].T.columns)
+    
+    for key in manual_mast_dict_versions.keys():
+        manual_agg_df = pd.merge(manual_agg_df,manual_mast_dict_versions[key][0],left_index=True, right_index=True, how='left')
+    
+    manual_agg_df = manual_agg_df.T
+    manual_agg_df = manual_agg_df.dropna(subset=['Loan Name'])
+    manual_agg_df['Ln\nID'] = manual_agg_df['Ln\nID'].astype('str')
+    manual_agg_df['Key'] = manual_agg_df['Ln\nID']+manual_agg_df['Deal_Name']
+
+## Apply formatting
+
+## Success/Fail Ratio
+
+suc = []
+for i in list(mast_dict_versions.keys()):
+    suc.append(mast_dict_versions[i][1])
+    
+fal = []
+for i in list(mast_dict_versions.keys()):
+    fal.append(mast_dict_versions[i][2])
+
+s_rate = float(sum(suc))/(sum(suc)+sum(fal))
+
+## Excel File Conversion
+
+os.chdir(r'') #insert output path
+excelwriter = pd.ExcelWriter('Credit Aggregation Analysis -'+dt.datetime.today().strftime('%m-%d-%Y')+'.xlsx',engine = 'xlsxwriter')
+final_agg_df.to_excel(excelwriter,'Report - Credit Analysis',index=False)
+excelwriter.save()
+excelwriter.close()
